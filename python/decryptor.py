@@ -5,6 +5,7 @@ import random
 from Crypto.Cipher import PKCS1_OAEP
 from Crypto.PublicKey import RSA
 import hashlib
+from datetime import datetime
 from base64 import urlsafe_b64encode, urlsafe_b64decode
 
 def base64UrlEncode(data):
@@ -37,67 +38,124 @@ def NBS_size_calc(FS):
     if (T == 1):
         NBS = 0
     else:
-        NBS = (FS-(T<<12))/(T-1)
+        NBS = (FS-(int(T)<<12))/(T-1)
     print("NBS = ", NBS)
     gc.collect()
-    return NBS
+    return int(NBS)
 
 #str(base64UrlEncode(bytes(str(hex(int(full_bit_or,2))), encoding='utf-8')).decode('utf-8'))
 
 def calc_offsets(if_name):
     if_name = if_name.split(".")[-2]
     print(if_name) #MHg2MTFkYTkwMjk0NDlkZGFiZmZmYmZjZWZmYmY3ZjliZQ
-    R = base64UrlDecode(if_name)[16:]
-    R1 = int(R[:8],16)
-    R2 = int(R[8:],16)
+    R = if_name.split("_")
+    R1 = int(base64UrlDecode(R[1]),16) #int(R[:8],16)
+    R2 = int(base64UrlDecode(R[2]),16) #int(R[8:],16)
     SP1 = R1%0x900000
     SP2 = R2%0x9FFC00
     return (SP1, SP2)
 
+def bxor(b1, b2): # use xor for bytes
+    result = bytearray()
+    for b1, b2 in zip(b1, b2):
+        result.append(b1 ^ b2)
+    return bytes(result)
+
+def createEQSFile(EQS):
+    if os.path.isfile("./EQS.txt"):
+        os.remove("EQS.txt")
+    with open("EQS.txt",'a') as f:
+        f.write("--- EQS created " + str(datetime.now()) + " ---\n\n")
+        for EQ in EQS:
+            #print(EQ)
+            if(EQ is not None):
+                f.write(str(EQ[0]) + ", " + str(EQ[1]) + ", " + str(EQ[2]) +"\n")
+            else:
+                f.write("None\n")
+
+def createEKFile(EK):
+    if os.path.isfile("./EK.bin"):
+        os.remove("EK.bin")
+    with open("EK.bin",'ab') as f:
+        #f.write("--- EK created " + str(datetime.now()) + " ---\n\n")
+        for E in EK:
+            #print(EQ)
+            f.write(bytes(E))
+            
 
 def mkey_recover(infected,original):
-    print(type(infected),type(original))
-    print(infected)
-    print(original)
+    
     for k in range(len(infected)):
         i_file = infected[k]
         o_file = original[k]
+        print(i_file, o_file)
         NBS = NBS_size_calc(os.stat(i_file).st_size)
         SP1, SP2 = calc_offsets(i_file)
-        iter = os.stat(i_file).st_size/(0x1000+NBS)
+        iter = int(os.stat(i_file).st_size/(0x1000+NBS))
         offset=0
 
         EQS = set({None})
-
+        i_file_file = open(i_file,"rb")
+        o_file_file = open(o_file,"rb")
+        i_file_opened = i_file_file.read()
+        o_file_opened = o_file_file.read()
         for i in range(0,iter):
             if (i==iter):
+                print("ITER")
                 offset = None #final encryption block offset
 
             for j in range(0,0xFFF):
                 O1 = offset%0x100000
                 O2 = offset%0x1000
-                EQS.add((SP1+O1, SP2+O2, i_file[offset]^o_file[offset]))
-                #.IF[offset]^ OF[offset] == byte of EKS
+                EQS.add((SP1+O1, SP2+O2, i_file_opened[offset]^o_file_opened[offset])) 
                 offset+=1
 
-            offset+=NBS
-    # Extract equation end
-    EK = [None]*0xA00000
+            offset+=int(NBS)
+        i_file_file.close()
+        o_file_file.close()
+    
+    target = b'\0' #None 
+
+    EK = [target]*0xA00000
     E = random.choice(tuple(EQS))
     EK[E[0]] = random.choice(tuple(range(256)))
     EQS = tuple(EQS)
+    #print(EQS.index(None),len(EQS))
     length = len(EQS)
+
     while len(EQS) == length:
         for EQ in EQS:
-            if (EK[EQ[0]] == None) and (EK[EQ[1]] == None):
+            if EQ is None:
                 pass
-            elif (EK[EQ[0]] != None) and (EK[EQ[1]] == None):
-                EK[EQ[1]] = EK[EQ[0]] ^ EK[EQ[2]]
-            elif (EK[EQ[0]] == None) and (EK[EQ[1]] != None):
-                EK[EQ[0]] = EK[EQ[1]] ^ EK[EQ[2]]
-            elif (EK[EQ[0]] != None) and (EK[EQ[1]] != None):
-                EQS.remove(EQ)
-    print(EQS)
+            else:
+                if EQ is not None or EQ != (target,target,target) or EQ != (None,):
+                    if (EK[EQ[0]] == target) and (EK[EQ[1]] == target):
+                        #print("none")
+                        pass
+
+                    elif (EK[EQ[0]] != target) and (EK[EQ[1]] == target):
+                        print("first", EK[EQ[0]], EK[EQ[1]], EK[EQ[2]])
+                        if isinstance(EK[EQ[0]],int):
+                            a = EK[EQ[0]].to_bytes(1,"big")
+                        else:
+                            a = EK[EQ[0]]
+                        EK[EQ[1]] =bytes([_a ^ _b for _a, _b in zip(a,EK[EQ[2]])])
+
+                    elif (EK[EQ[0]] == target) and (EK[EQ[1]] != target):
+                        print("second", EK[EQ[0]], EK[EQ[1]], EK[EQ[2]])
+                        if isinstance(EK[EQ[1]],int):
+                            b = EK[EQ[1]].to_bytes(1,"big")
+                        else:
+                            b = EK[EQ[1]]
+                        EK[EQ[0]] = bytes([_a ^ _b for _a, _b in zip(b,EK[EQ[2]])]) 
+
+                    elif (EK[EQ[0]] != target) and (EK[EQ[1]] != target):
+                        #print("third", EK[EQ[0]], EK[EQ[1]], EK[EQ[2]])
+                        EQS = list(EQS)
+                        EQS.remove(EQ)
+                        EQS = tuple(EQS)
+    createEQSFile(EQS)
+    createEKFile(EK)
 
 def create_if_of():
     coll_if = []
