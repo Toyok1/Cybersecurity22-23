@@ -91,7 +91,7 @@ def mkey_recover(infected,original):
         print(i_file, o_file)
         NBS = NBS_size_calc(os.stat(i_file).st_size)
         SP1, SP2 = calc_offsets(i_file)
-        iter = int(os.stat(i_file).st_size/(0x1000+NBS))
+        iter = int(os.stat(i_file).st_size/(0x1000+int(NBS)))
         offset=0
 
         EQS = set({None})
@@ -99,10 +99,15 @@ def mkey_recover(infected,original):
         o_file_file = open(o_file,"rb")
         i_file_opened = i_file_file.read()
         o_file_opened = o_file_file.read()
-        for i in range(0,iter):
+        i_file_file.close()
+        o_file_file.close()
+        for i in range(0,iter+1):
             if (i==iter):
                 print("ITER")
-                offset = None #final encryption block offset
+                if (iter*(0x1000+int(NBS))) - os.stat(i_file).st_size > 0x1000:
+                    offset = os.stat(i_file).st_size - 0x1000 #final encryption block offset
+                else: 
+                    offset = (iter-1) * (0x1000+int(NBS)) + NBS
 
             for j in range(0,0xFFF):
                 O1 = offset%0x100000
@@ -111,8 +116,7 @@ def mkey_recover(infected,original):
                 offset+=1
 
             offset+=int(NBS)
-        i_file_file.close()
-        o_file_file.close()
+
     
     target = b'\0' #None 
 
@@ -136,21 +140,21 @@ def mkey_recover(infected,original):
                     elif (EK[EQ[0]] != target) and (EK[EQ[1]] == target):
                         print("first", EK[EQ[0]], EK[EQ[1]], EK[EQ[2]])
                         if isinstance(EK[EQ[0]],int):
-                            a = EK[EQ[0]].to_bytes(1,"big")
+                            a = EK[EQ[0]].to_bytes(1,"little")
                         else:
                             a = EK[EQ[0]]
                         EK[EQ[1]] =bytes([_a ^ _b for _a, _b in zip(a,EK[EQ[2]])])
 
                     elif (EK[EQ[0]] == target) and (EK[EQ[1]] != target):
-                        print("second", EK[EQ[0]], EK[EQ[1]], EK[EQ[2]])
+                        #print("second", EK[EQ[0]], EK[EQ[1]], EK[EQ[2]])
                         if isinstance(EK[EQ[1]],int):
-                            b = EK[EQ[1]].to_bytes(1,"big")
+                            b = EK[EQ[1]].to_bytes(1,"little")
                         else:
                             b = EK[EQ[1]]
                         EK[EQ[0]] = bytes([_a ^ _b for _a, _b in zip(b,EK[EQ[2]])]) 
 
                     elif (EK[EQ[0]] != target) and (EK[EQ[1]] != target):
-                        #print("third", EK[EQ[0]], EK[EQ[1]], EK[EQ[2]])
+                        print("third", EK[EQ[0]], EK[EQ[1]], EK[EQ[2]])
                         EQS = list(EQS)
                         EQS.remove(EQ)
                         EQS = tuple(EQS)
