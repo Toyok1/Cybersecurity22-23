@@ -8,7 +8,7 @@ import hashlib
 from base64 import urlsafe_b64encode, urlsafe_b64decode
 
 password = "hiveransomware"
-division_size = 200
+division_size = 210
 
 def base64UrlEncode(data):
     return urlsafe_b64encode(data).rstrip(b'=')
